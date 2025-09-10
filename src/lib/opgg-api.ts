@@ -21,6 +21,7 @@ export interface MatchData {
   matchId: string;
   championId: number;
   championName: string;
+  role?: string;
   queueId: number;
   gameMode: string;
   gameType: string;
@@ -555,11 +556,14 @@ export class OpggApiClient {
         const stats = me.stats || {};
         const spells = me.spells || [];
         const win = (stats.result || '').toUpperCase() === 'WIN';
+        const role = me.position || me.team_position || stats.position || stats.teamPosition || '';
+        const championName = me.champion_name || me.championName || me.champion?.name || '';
         
         out.push({
           matchId: r[iId] || '',
           championId: Number(me.champion_id || 0),
-          championName: '',
+          championName,
+          role,
           queueId: 0,
           gameMode: '',
           gameType: r[iGameType] || '',
@@ -591,7 +595,8 @@ export class OpggApiClient {
     return {
       matchId: match.matchId || match.id || '',
       championId: Number(match.championId || match.champion_id || 0),
-      championName: match.championName || '',
+      championName: match.championName || match.champion_name || match.champion?.name || '',
+      role: match.role || match.teamPosition || match.position || '',
       queueId: Number(match.queueId || 0),
       gameMode: match.gameMode || '',
       gameType: match.gameType || '',
@@ -621,7 +626,8 @@ export class OpggApiClient {
     return {
       matchId: match.id || match.matchId || '',
       championId: Number(participant.champion_id || participant.championId || 0),
-      championName: '',
+      championName: participant.champion_name || participant.championName || participant.champion?.name || '',
+      role: participant.position || stats.position || match.teamPosition || '',
       queueId: Number(match.queueId || 0),
       gameMode: match.gameMode || '',
       gameType: match.game_type || match.gameType || '',
@@ -700,7 +706,7 @@ export class OpggApiClient {
       
       log('MCP API: analyzing player data...');
       const boostedFlags = this.detectBoostingIndicators(recentMatches);
-      const performanceFlags = this.analyzePerformance(recentMatches.slice(0, 5));
+      const performanceFlags = this.analyzePerformance(recentMatches.slice(0, 10));
       const riskScore = this.calculateRiskScore(boostedFlags, performanceFlags, stats);
       
       log(`MCP API: success (${recentMatches.length} matches, risk: ${riskScore})`);
@@ -750,6 +756,13 @@ export class OpggApiClient {
     const olderWinRate = this.calculateWinRate(matches.slice(20, 50));
     const winRateSpike = recentWinRate - olderWinRate > 30; // 30% winrate improvement
 
+    // Recent performance drop (last 5 KDA vs previous 5)
+    const last5 = matches.slice(0, 5);
+    const prev5 = matches.slice(5, 10);
+    const avgKDALast5 = last5.length ? last5.reduce((s, m) => s + m.kda, 0) / last5.length : 0;
+    const avgKDAPrev5 = prev5.length ? prev5.reduce((s, m) => s + m.kda, 0) / prev5.length : 0;
+    const recentDrop = avgKDAPrev5 > 0 && (avgKDALast5 < avgKDAPrev5 * 0.6); // >40% drop
+
     // Check for inconsistent playstyle (big variations in performance)
     const kdaVariance = this.calculateKDAVariance(matches.slice(0, 20));
     const inconsistentPlaystyle = kdaVariance > 2.0; // High KDA variance indicates inconsistency
@@ -757,7 +770,7 @@ export class OpggApiClient {
     return {
       flashPositionChanged: flashPositionChanges > 0,
       flashChangeCount: flashPositionChanges,
-      recentPerformanceDrop: false, // Will implement based on KDA trends
+      recentPerformanceDrop: recentDrop,
       suspiciousWinrateSpike: winRateSpike,
       inconsistentPlaystyle
     };

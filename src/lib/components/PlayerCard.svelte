@@ -13,8 +13,9 @@
   $: riskScore = analysis.riskScore;
   
   // Color coding based on risk score
-  $: riskColor = riskScore >= 70 ? 'text-red-500' : riskScore >= 40 ? 'text-yellow-500' : 'text-green-500';
-  $: riskBg = riskScore >= 70 ? 'bg-red-100' : riskScore >= 40 ? 'bg-yellow-100' : 'bg-green-100';
+  $: riskColor = riskScore >= 70 ? 'text-red-400' : riskScore >= 40 ? 'text-yellow-400' : 'text-green-400';
+  // Use dark card background; avoid light backgrounds in black theme
+  $: riskBg = '';
   
   // Rank color mapping
   const rankColors: Record<string, string> = {
@@ -36,9 +37,37 @@
     if (score >= 40) return 'MEDIUM RISK';
     return 'LOW RISK';
   }
+
+  $: isUnranked = !playerStats?.tier || playerStats.tier === 'UNRANKED' || playerStats.tier === 'NA';
+  $: hasRankedWL = (playerStats?.wins ?? 0) + (playerStats?.losses ?? 0) > 0;
+  $: hasMatches = (analysis?.recentMatches?.length ?? 0) > 0;
+
+  // Primary role detection from recent matches
+  const SMITE_ID = 11;
+  const HEAL_ID = 7;
+  const TELEPORT_ID = 12;
+  function detectPrimaryRole() {
+    if (!hasMatches) return 'Unknown';
+    const games = analysis.recentMatches.slice(0, 10);
+    const smiteCount = games.filter(m => m.summoner1Id === SMITE_ID || m.summoner2Id === SMITE_ID).length;
+    if (smiteCount >= Math.max(1, Math.ceil(games.length * 0.4))) return 'Jungle';
+    // compute CS/min over recent
+    const csmins = games.map(m => {
+      const mins = Math.max(1, Math.round((m.gameDuration || 0) / 60));
+      return (m.totalMinionsKilled || 0) / mins;
+    });
+    const avgCsMin = csmins.reduce((a,b)=>a+b,0) / csmins.length;
+    const healCount = games.filter(m => m.summoner1Id === HEAL_ID || m.summoner2Id === HEAL_ID).length;
+    const tpCount = games.filter(m => m.summoner1Id === TELEPORT_ID || m.summoner2Id === TELEPORT_ID).length;
+    if (avgCsMin < 3.0) return 'Support';
+    if (avgCsMin >= 5.5 && healCount >= Math.ceil(games.length * 0.3)) return 'ADC';
+    if (tpCount >= Math.ceil(games.length * 0.4)) return 'Top';
+    return 'Mid';
+  }
+  $: primaryRole = detectPrimaryRole();
 </script>
 
-<Card class="w-full max-w-md {riskBg} border-l-4 {riskScore >= 70 ? 'border-l-red-500' : riskScore >= 40 ? 'border-l-yellow-500' : 'border-l-green-500'}">
+<Card class="w-full max-w-md bg-gray-900/80 border border-gray-800 shadow-md border-l-4 {riskScore >= 70 ? 'border-l-red-500' : riskScore >= 40 ? 'border-l-yellow-500' : 'border-l-green-600'}">
   <CardHeader class="pb-3">
     <div class="flex items-center justify-between">
       <CardTitle class="text-lg font-bold">
@@ -50,8 +79,8 @@
         <Shield class="h-5 w-5 {riskColor}" />
       {/if}
     </div>
-    <div class="text-sm text-gray-600">
-      Level {playerStats.level} • {playerStats.region.toUpperCase()}
+    <div class="text-sm text-gray-300">
+      Level {playerStats.level} • {playerStats.region.toUpperCase()} • {primaryRole}
     </div>
   </CardHeader>
   
@@ -61,83 +90,93 @@
       <div class="flex items-center space-x-2">
         <span class="text-sm font-medium">Rank:</span>
         <Badge variant="outline" class="{rankColors[playerStats.tier] || 'text-gray-500'}">
-          {playerStats.tier === 'UNRANKED' ? 'Unranked' : `${playerStats.tier} ${playerStats.rank}`}
+          {isUnranked ? 'Unranked' : `${playerStats.tier} ${playerStats.rank}`}
         </Badge>
       </div>
-      {#if playerStats.tier !== 'UNRANKED'}
-        <span class="text-sm text-gray-600">{playerStats.lp} LP</span>
+      {#if !isUnranked}
+        <span class="text-sm text-gray-300">{playerStats.lp} LP</span>
       {/if}
     </div>
     
     <!-- Win Rate -->
-    <div class="space-y-1">
-      <div class="flex items-center justify-between text-sm">
-        <span class="font-medium">Win Rate</span>
-        <span class="font-bold {playerStats.winRate >= 60 ? 'text-green-600' : playerStats.winRate <= 40 ? 'text-red-600' : 'text-gray-700'}">
-          {playerStats.winRate.toFixed(1)}%
-        </span>
+    {#if hasRankedWL}
+      <div class="space-y-1">
+        <div class="flex items-center justify-between text-sm">
+          <span class="font-medium">Win Rate</span>
+          <span class="font-bold {playerStats.winRate >= 60 ? 'text-green-400' : playerStats.winRate <= 40 ? 'text-red-400' : 'text-gray-200'}">
+            {playerStats.winRate.toFixed(1)}%
+          </span>
+        </div>
+        <Progress value={playerStats.winRate} class="h-2" />
+        <div class="flex justify-between text-xs text-gray-400">
+          <span>{playerStats.wins}W</span>
+          <span>{playerStats.losses}L</span>
+        </div>
       </div>
-      <Progress value={playerStats.winRate} class="h-2" />
-      <div class="flex justify-between text-xs text-gray-500">
-        <span>{playerStats.wins}W</span>
-        <span>{playerStats.losses}L</span>
+    {:else}
+      <div class="space-y-1">
+        <div class="flex items-center justify-between text-sm">
+          <span class="font-medium">Win Rate</span>
+          <span class="text-gray-400">N/A</span>
+        </div>
+        <div class="text-xs text-gray-400">No ranked data</div>
       </div>
-    </div>
+    {/if}
     
     <!-- Risk Assessment -->
     <div class="space-y-2">
       <div class="flex items-center justify-between">
         <span class="text-sm font-medium">Risk Score</span>
-        <Badge variant="destructive" class="{riskBg} {riskColor}">
+        <Badge variant="destructive" class="{riskColor} bg-transparent border border-current">
           {getRiskLabel(riskScore)}
         </Badge>
       </div>
       <Progress value={riskScore} class="h-2" />
-      <span class="text-xs text-gray-600">{riskScore}/100</span>
+      <span class="text-xs text-gray-300">{riskScore}/100</span>
     </div>
     
     <!-- Warning Flags -->
-    {#if boostedFlags.flashPositionChanged || boostedFlags.suspiciousWinrateSpike || performanceFlags.isFeeding || performanceFlags.poorKDA}
+    {#if hasMatches && (boostedFlags.flashPositionChanged || boostedFlags.suspiciousWinrateSpike || performanceFlags.isFeeding || performanceFlags.poorKDA)}
       <div class="space-y-2">
-        <span class="text-sm font-medium text-amber-700">⚠️ Warning Signs</span>
+        <span class="text-sm font-medium text-amber-400">⚠️ Warning Signs</span>
         <div class="space-y-1">
           {#if boostedFlags.flashPositionChanged}
-            <div class="flex items-center text-xs text-red-600">
+            <div class="flex items-center text-xs text-red-400">
               <TrendingDown class="h-3 w-3 mr-1" />
               Flash position changed {boostedFlags.flashChangeCount} time(s) recently
             </div>
           {/if}
           
           {#if boostedFlags.suspiciousWinrateSpike}
-            <div class="flex items-center text-xs text-orange-600">
+            <div class="flex items-center text-xs text-orange-400">
               <TrendingUp class="h-3 w-3 mr-1" />
               Suspicious winrate improvement detected
             </div>
           {/if}
           
           {#if boostedFlags.inconsistentPlaystyle}
-            <div class="flex items-center text-xs text-yellow-600">
+            <div class="flex items-center text-xs text-yellow-400">
               <AlertTriangle class="h-3 w-3 mr-1" />
               Inconsistent performance patterns
             </div>
           {/if}
           
           {#if performanceFlags.isFeeding}
-            <div class="flex items-center text-xs text-red-600">
+            <div class="flex items-center text-xs text-red-400">
               <TrendingDown class="h-3 w-3 mr-1" />
               High death count (feeding pattern)
             </div>
           {/if}
           
           {#if performanceFlags.poorKDA}
-            <div class="flex items-center text-xs text-red-600">
+            <div class="flex items-center text-xs text-red-400">
               <TrendingDown class="h-3 w-3 mr-1" />
               Poor KDA performance
             </div>
           {/if}
           
           {#if performanceFlags.lowVisionScore}
-            <div class="flex items-center text-xs text-yellow-600">
+            <div class="flex items-center text-xs text-yellow-400">
               <AlertTriangle class="h-3 w-3 mr-1" />
               Low vision control
             </div>
@@ -146,18 +185,20 @@
       </div>
     {/if}
     
-    <!-- Recent Matches Preview -->
-    {#if analysis.recentMatches.length > 0}
+    <!-- Recent Matches List -->
+    {#if hasMatches}
       <div class="space-y-2">
         <span class="text-sm font-medium">Recent Matches</span>
-        <div class="flex space-x-1">
-          {#each analysis.recentMatches.slice(0, 8) as match}
-            <div 
-              class="w-4 h-4 rounded-sm flex items-center justify-center text-[10px] font-bold text-white
-                     {match.win ? 'bg-green-500' : 'bg-red-500'}"
-              title="{match.championName}: {match.kills}/{match.deaths}/{match.assists} - {match.win ? 'Win' : 'Loss'}"
-            >
-              {match.win ? 'W' : 'L'}
+        <div class="space-y-1">
+          {#each analysis.recentMatches.slice(0, 10) as match}
+            <div class="flex items-center justify-between text-xs px-2 py-1 rounded border border-gray-800 bg-gray-950/60">
+              <div class="flex items-center gap-2">
+                <span class="font-semibold {match.win ? 'text-green-400' : 'text-red-400'}">{match.win ? 'W' : 'L'}</span>
+                <span class="text-gray-200">{match.championName || ('#' + match.championId)}</span>
+              </div>
+              <div class="text-gray-300">
+                {match.kills}/{match.deaths}/{match.assists}
+              </div>
             </div>
           {/each}
         </div>

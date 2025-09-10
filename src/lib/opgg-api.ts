@@ -59,7 +59,31 @@ export interface PlayerAnalysis {
     lowVisionScore: boolean;
     inconsistentCS: boolean;
   };
+  advanced?: AdvancedMetrics;
   riskScore: number; // 0-100, higher = more suspicious
+}
+
+export interface AdvancedMetrics {
+  gamesAnalyzed: number;
+  winRateRecent10: number;
+  kdaAvg: number;
+  killsAvg: number;
+  deathsAvg: number;
+  assistsAvg: number;
+  csPerMinAvg: number;
+  visionPerMinAvg: number;
+  damagePerMinAvg: number;
+  goldPerMinAvg: number;
+  streakType: 'WIN' | 'LOSS' | 'NONE';
+  streakCount: number;
+  roleDistribution: Record<string, number>;
+  primaryRole: string;
+  roleSwitchCount: number;
+  championPoolSize: number;
+  topChampionId: number | null;
+  topChampionGames: number;
+  topChampionWinRate: number;
+  smurfSuspected: boolean;
 }
 
 export class OpggApiClient {
@@ -707,7 +731,8 @@ export class OpggApiClient {
       log('MCP API: analyzing player data...');
       const boostedFlags = this.detectBoostingIndicators(recentMatches);
       const performanceFlags = this.analyzePerformance(recentMatches.slice(0, 10));
-      const riskScore = this.calculateRiskScore(boostedFlags, performanceFlags, stats);
+      const advanced = this.computeAdvancedMetrics(recentMatches, stats);
+      const riskScore = this.calculateRiskScore(boostedFlags, performanceFlags, stats, advanced);
       
       log(`MCP API: success (${recentMatches.length} matches, risk: ${riskScore})`);
       return { 
@@ -715,6 +740,7 @@ export class OpggApiClient {
         recentMatches: recentMatches.slice(0, 10), 
         boostedFlags, 
         performanceFlags, 
+        advanced,
         riskScore 
       };
     } catch (error) {
@@ -811,7 +837,8 @@ export class OpggApiClient {
   private calculateRiskScore(
     boostedFlags: PlayerAnalysis['boostedFlags'],
     performanceFlags: PlayerAnalysis['performanceFlags'],
-    playerStats: PlayerStats
+    playerStats: PlayerStats,
+    advanced?: AdvancedMetrics
   ): number {
     let score = 0;
 
@@ -830,7 +857,135 @@ export class OpggApiClient {
     const isHighRank = ['MASTER', 'GRANDMASTER', 'CHALLENGER'].includes(playerStats.tier);
     if (isHighRank && score > 30) score += 20;
 
+    // Advanced adjustments
+    if (advanced) {
+      // Large role switching can indicate account sharing/boosting
+      if (advanced.roleSwitchCount >= 3) score += 10;
+      if (advanced.roleSwitchCount >= 5) score += 10;
+
+      // Extremely high performance at low level/rank can indicate smurfing/boosting
+      const lowRank = ['IRON','BRONZE','SILVER','GOLD','PLATINUM','EMERALD'].includes(playerStats.tier || '');
+      if (lowRank && advanced.kdaAvg >= 4.5 && advanced.csPerMinAvg >= 7) score += 25;
+      if (advanced.smurfSuspected) score += 15;
+
+      // Strong negative streak
+      if (advanced.streakType === 'LOSS' && advanced.streakCount >= 4) score += 10;
+      if (advanced.streakType === 'LOSS' && advanced.streakCount >= 6) score += 10;
+    }
+
     return Math.min(100, score);
+  }
+
+  private standardizeRole(role: string | undefined): string {
+    if (!role) return 'UNKNOWN';
+    const r = role.toUpperCase();
+    if (['JUNGLE','JGL'].includes(r)) return 'JUNGLE';
+    if (['TOP','TOPLANE','TOP LANE'].includes(r)) return 'TOP';
+    if (['MID','MIDDLE','MIDLANE','MIDDLE LANE'].includes(r)) return 'MID';
+    if (['ADC','BOTTOM','BOT','BOTTOM LANE'].includes(r)) return 'ADC';
+    if (['SUPPORT','SUP','SUPP'].includes(r)) return 'SUPPORT';
+    return 'UNKNOWN';
+  }
+
+  private detectRoleHeuristic(m: MatchData): string {
+    // Prefer explicit role if available
+    const explicit = this.standardizeRole(m.role);
+    if (explicit !== 'UNKNOWN') return explicit;
+    // Heuristics based on spells and CS/min
+    const smiteId = 11, healId = 7, teleportId = 12;
+    const minutes = Math.max(1, Math.round((m.gameDuration || 0) / 60));
+    const csPerMin = (m.totalMinionsKilled || 0) / minutes;
+    if (m.summoner1Id === smiteId || m.summoner2Id === smiteId) return 'JUNGLE';
+    if (csPerMin < 3.0) return 'SUPPORT';
+    const hasHeal = m.summoner1Id === healId || m.summoner2Id === healId;
+    if (csPerMin >= 5.5 && hasHeal) return 'ADC';
+    const hasTP = m.summoner1Id === teleportId || m.summoner2Id === teleportId;
+    if (hasTP) return 'TOP';
+    return 'MID';
+  }
+
+  private computeAdvancedMetrics(matches: MatchData[], stats: PlayerStats): AdvancedMetrics {
+    const games = matches.slice(0, 10); // focus on last 10
+    const mins = (m: MatchData) => Math.max(1, (m.gameDuration || 0) / 60);
+    const sum = (arr: number[]) => arr.reduce((a,b)=>a+b,0);
+
+    const kdas = games.map(m => m.kda || ((m.kills+m.assists)/Math.max(1,m.deaths)));
+    const kills = games.map(m => m.kills);
+    const deaths = games.map(m => m.deaths);
+    const assists = games.map(m => m.assists);
+    const csmins = games.map(m => (m.totalMinionsKilled || 0) / mins(m));
+    const vpm = games.map(m => (m.visionScore || 0) / mins(m));
+    const dpm = games.map(m => (m.damageDealtToChampions || 0) / mins(m));
+    const gpm = games.map(m => (m.goldEarned || 0) / mins(m));
+
+    // Role distribution and switches
+    const roles = games.map(m => this.detectRoleHeuristic(m));
+    const roleDist: Record<string, number> = {};
+    let roleSwitches = 0;
+    let lastRole = '';
+    for (const r of roles) {
+      roleDist[r] = (roleDist[r] || 0) + 1;
+      if (lastRole && r !== lastRole) roleSwitches++;
+      lastRole = r;
+    }
+    const primaryRole = Object.keys(roleDist).sort((a,b)=> (roleDist[b]||0)-(roleDist[a]||0))[0] || 'UNKNOWN';
+
+    // Champion pool and top champion stats
+    const champDist: Record<number, {games:number; wins:number}> = {};
+    games.forEach(m => {
+      const id = m.championId || 0;
+      champDist[id] = champDist[id] || {games:0,wins:0};
+      champDist[id].games += 1;
+      if (m.win) champDist[id].wins += 1;
+    });
+    const championPoolSize = Object.keys(champDist).filter(k => Number(k) > 0).length;
+    const top = Object.entries(champDist).sort((a,b)=> b[1].games - a[1].games)[0];
+    const topChampionId = top ? Number(top[0]) : null;
+    const topChampionGames = top ? top[1].games : 0;
+    const topChampionWinRate = top ? (top[1].wins/top[1].games)*100 : 0;
+
+    // Streak
+    let streakType: 'WIN'|'LOSS'|'NONE' = 'NONE';
+    let streakCount = 0;
+    for (const m of games) {
+      if (streakType === 'NONE') {
+        streakType = m.win ? 'WIN' : 'LOSS';
+        streakCount = 1;
+      } else if ((m.win && streakType==='WIN') || (!m.win && streakType==='LOSS')) {
+        streakCount++;
+      } else {
+        break;
+      }
+    }
+
+    // A very simple smurf suspicion heuristic
+    const lowRank = ['IRON','BRONZE','SILVER','GOLD','PLATINUM','EMERALD'].includes((stats.tier||'').toUpperCase());
+    const smurfSuspected = lowRank && (
+      (sum(kills)/Math.max(1,games.length)) >= 8 && (sum(deaths)/Math.max(1,games.length)) <= 4 && (sum(csmins)/Math.max(1,games.length)) >= 6.5
+    );
+
+    return {
+      gamesAnalyzed: games.length,
+      winRateRecent10: (games.filter(m=>m.win).length / Math.max(1, games.length)) * 100,
+      kdaAvg: sum(kdas) / Math.max(1, games.length),
+      killsAvg: sum(kills) / Math.max(1, games.length),
+      deathsAvg: sum(deaths) / Math.max(1, games.length),
+      assistsAvg: sum(assists) / Math.max(1, games.length),
+      csPerMinAvg: sum(csmins) / Math.max(1, games.length),
+      visionPerMinAvg: sum(vpm) / Math.max(1, games.length),
+      damagePerMinAvg: sum(dpm) / Math.max(1, games.length),
+      goldPerMinAvg: sum(gpm) / Math.max(1, games.length),
+      streakType,
+      streakCount,
+      roleDistribution: roleDist,
+      primaryRole,
+      roleSwitchCount: roleSwitches,
+      championPoolSize,
+      topChampionId,
+      topChampionGames,
+      topChampionWinRate,
+      smurfSuspected
+    };
   }
 
   /**

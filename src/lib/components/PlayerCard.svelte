@@ -65,6 +65,8 @@
     return 'Mid';
   }
   $: primaryRole = detectPrimaryRole();
+  // Advanced metrics from analysis if available
+  $: adv = analysis.advanced;
 </script>
 
 <Card class="w-full max-w-md bg-gray-900/80 border border-gray-800 shadow-md border-l-4 {riskScore >= 70 ? 'border-l-red-500' : riskScore >= 40 ? 'border-l-yellow-500' : 'border-l-green-600'}">
@@ -134,6 +136,34 @@
       <Progress value={riskScore} class="h-2" />
       <span class="text-xs text-gray-300">{riskScore}/100</span>
     </div>
+
+    {#if adv}
+      <div class="grid grid-cols-2 gap-3 text-xs text-gray-300">
+        <div>
+          <div class="font-medium text-gray-200">Recent (10 games)</div>
+          <div>WR: {adv.winRateRecent10.toFixed(1)}%</div>
+          <div>KDA: {adv.kdaAvg.toFixed(2)}</div>
+        </div>
+        <div>
+          <div class="font-medium text-gray-200">Per Minute</div>
+          <div>CS: {adv.csPerMinAvg.toFixed(2)}</div>
+          <div>DMG: {adv.damagePerMinAvg.toFixed(0)}</div>
+        </div>
+        <div>
+          <div class="font-medium text-gray-200">Vision</div>
+          <div>V/M: {adv.visionPerMinAvg.toFixed(2)}</div>
+          <div>Gold/M: {adv.goldPerMinAvg.toFixed(0)}</div>
+        </div>
+        <div>
+          <div class="font-medium text-gray-200">Pool & Streak</div>
+          <div>Pool: {adv.championPoolSize}</div>
+          <div>{adv.streakType} x{adv.streakCount}</div>
+        </div>
+      </div>
+      {#if adv.smurfSuspected}
+        <div class="text-xs text-amber-400">Smurf suspected from performance vs rank</div>
+      {/if}
+    {/if}
     
     <!-- Warning Flags -->
     {#if hasMatches && (boostedFlags.flashPositionChanged || boostedFlags.suspiciousWinrateSpike || performanceFlags.isFeeding || performanceFlags.poorKDA)}

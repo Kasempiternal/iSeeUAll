@@ -201,11 +201,37 @@ async fn handle_ws_message(
         "OnJsonApiEvent_lol-champ-select_v1_session" => {
             let champ_select = serde_json::from_value::<ChampSelectSession>(msg.data.clone());
             if champ_select.is_err() {
-                println!("Failed to parse champ select session!, {:?}", champ_select);
+                println!("Failed to parse champ select session!, {:?}", champ_select.err());
                 return;
             }
 
             let champ_select = champ_select.unwrap();
+            println!("Champion select session detected - Phase: {}", champ_select.timer.phase);
+            
+            // Handle champion select start for all phases except FINALIZATION
+            if champ_select.timer.phase != "FINALIZATION" && champ_select.timer.phase != "" {
+                // Instead of waiting for gameflow state, handle it directly from WebSocket
+                let cloned_app_handle = app_handle.clone();
+                let cloned_app_client = app_client.clone();
+                let cloned_remoting = remoting_client.clone();
+                
+                tauri::async_runtime::spawn(async move {
+                    // Small delay to ensure champion select is fully loaded
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    
+                    // Get config inside the async block to avoid lifetime issues
+                    let cfg = cloned_app_handle.state::<AppConfig>();
+                    let cfg = cfg.0.lock().await;
+                    
+                    crate::champ_select::handle_champ_select_start(
+                        &cloned_app_client,
+                        &cloned_remoting,
+                        &cfg,
+                        &cloned_app_handle,
+                    ).await;
+                });
+            }
+            
             if champ_select.timer.phase == "FINALIZATION" {
                 let time = champ_select.timer.adjusted_time_left_in_phase;
                 let cloned_remoting = remoting_client.clone();

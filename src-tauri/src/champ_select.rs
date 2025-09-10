@@ -126,16 +126,37 @@ pub async fn handle_champ_select_start(
     config: &Config,
     app_handle: &AppHandle,
 ) {
+    println!("=== Champion Select Started Handler ===");
+    
     let team = lobby::get_lobby_info(app_client).await;
-    let region_info: RegionInfo = serde_json::from_value(
-        app_client
-            .get("/riotclient/region-locale".to_string())
-            .await
-            .unwrap(),
-    )
-    .unwrap();
+    
+    // Get region info with error handling
+    let region_info_result = app_client
+        .get("/riotclient/region-locale".to_string())
+        .await;
+        
+    if let Err(e) = region_info_result {
+        println!("Error fetching region info: {:?}", e);
+        return;
+    }
+    
+    let region_info: Result<RegionInfo, _> = serde_json::from_value(region_info_result.unwrap());
+    
+    if let Err(e) = region_info {
+        println!("Error parsing region info: {:?}", e);
+        return;
+    }
+    
+    let region_info = region_info.unwrap();
+    println!("Region: {}", region_info.web_region);
 
-    app_handle.emit_all("champ_select_started", &team).unwrap();
+    // Emit the event to frontend
+    println!("Emitting champ_select_started event with {} participants", team.participants.len());
+    if let Err(e) = app_handle.emit_all("champ_select_started", &team) {
+        println!("Error emitting champ_select_started event: {:?}", e);
+    } else {
+        println!("Successfully emitted champ_select_started event!");
+    }
 
     if config.auto_open {
         let region = match region_info.web_region.as_str() {
@@ -148,4 +169,6 @@ pub async fn handle_champ_select_start(
 
     let summoner = summoner::get_current_summoner(remoting_client).await;
     analytics::send_analytics_event(&team, &summoner, &region_info).await;
+    
+    println!("=== Champion Select Handler Complete ===");
 }

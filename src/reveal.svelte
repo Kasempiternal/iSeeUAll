@@ -7,6 +7,7 @@
   import { startIvernAutoSelect } from "$lib/lcu";
   import { state } from "$lib/state";
   import LobbyAnalysis from "$lib/components/LobbyAnalysis.svelte";
+  import ConnectionStatus from "$lib/components/ConnectionStatus.svelte";
   import { listen } from '@tauri-apps/api/event';
 
   let config: Config;
@@ -139,12 +140,25 @@
   }
 </script>
 
-<div class="flex flex-col gap-6 p-4 max-w-7xl mx-auto">
-  <!-- Header -->
-  <div class="text-center">
-    <h1 class="text-3xl font-bold">Reveal</h1>
-    <p class="text-gray-600 mt-1">League of Legends Champion Select Utility</p>
+<div class="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
+  <!-- Top Bar with Connection Status -->
+  <div class="flex justify-between items-center p-4 bg-white/80 backdrop-blur-sm border-b border-gray-200">
+    <div class="flex items-center gap-3">
+      <div class="w-8 h-8 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-lg flex items-center justify-center">
+        <span class="text-white font-bold text-sm">R</span>
+      </div>
+      <div>
+        <h1 class="text-xl font-bold text-gray-900">Reveal</h1>
+        <p class="text-xs text-gray-500">Champion Select Utility</p>
+      </div>
+    </div>
+    
+    <!-- Connection Status in top-right -->
+    <ConnectionStatus />
   </div>
+
+  <!-- Main Content -->
+  <div class="flex flex-col gap-6 p-6 max-w-7xl mx-auto">
 
   <!-- Lobby Analysis Section -->
   {#if isInChampSelect}
@@ -154,38 +168,45 @@
   {/if}
 
   <!-- Settings Section -->
-  <Card>
-    <CardHeader>
-      <CardTitle class="text-xl">Settings</CardTitle>
+  <Card class="bg-white/90 backdrop-blur-sm border-0 shadow-lg">
+    <CardHeader class="bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-t-lg">
+      <CardTitle class="text-xl flex items-center gap-2">
+        <div class="w-6 h-6 bg-white/20 rounded-full flex items-center justify-center">
+          <span class="text-sm">⚙️</span>
+        </div>
+        Settings
+      </CardTitle>
     </CardHeader>
-    <CardContent class="space-y-6">
+    <CardContent class="space-y-6 p-6">
       <!-- Ivern Auto-Select Settings -->
       <div class="space-y-4">
         <h3 class="text-lg font-semibold">Ivern Auto-Select</h3>
         
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div class="flex items-center justify-between p-3 border rounded-lg">
+          <div class="flex items-center justify-between p-4 bg-gradient-to-br from-green-50 to-emerald-50 border border-green-200 rounded-xl shadow-sm hover:shadow-md transition-all">
             <div>
-              <span class="font-medium">Enable Auto-Select</span>
-              <p class="text-sm text-gray-600">Automatically select Ivern in champion select</p>
+              <span class="font-medium text-green-800">Enable Auto-Select</span>
+              <p class="text-sm text-green-600">Automatically select Ivern in champion select</p>
             </div>
             <Button 
               variant={ivernEnabled ? "default" : "secondary"} 
               on:click={toggleIvernSelect}
+              class={ivernEnabled ? "bg-green-600 hover:bg-green-700" : ""}
             >
               {ivernEnabled ? "Enabled" : "Disabled"}
             </Button>
           </div>
           
-          <div class="flex items-center justify-between p-3 border rounded-lg">
+          <div class="flex items-center justify-between p-4 bg-gradient-to-br from-blue-50 to-cyan-50 border border-blue-200 rounded-xl shadow-sm hover:shadow-md transition-all">
             <div>
-              <span class="font-medium">Auto-lock Mode</span>
-              <p class="text-sm text-gray-600">Lock in Ivern immediately or just hover</p>
+              <span class="font-medium text-blue-800">Auto-lock Mode</span>
+              <p class="text-sm text-blue-600">Lock in Ivern immediately or just hover</p>
             </div>
             <Button 
               variant={autoLock ? "default" : "secondary"} 
               on:click={toggleAutoLock}
               disabled={!ivernEnabled}
+              class={autoLock && ivernEnabled ? "bg-blue-600 hover:bg-blue-700" : ""}
             >
               {autoLock ? "Lock-in" : "Hover only"}
             </Button>
@@ -196,30 +217,41 @@
       <!-- Player Analysis Settings -->
       <div class="space-y-4">
         <h3 class="text-lg font-semibold">Player Analysis</h3>
-        <div class="p-3 border rounded-lg bg-blue-50">
-          <div class="flex items-center space-x-2 mb-2">
-            <div class="w-3 h-3 bg-blue-500 rounded-full"></div>
-            <span class="font-medium text-blue-900">Automatic Analysis</span>
+        <div class="p-4 bg-gradient-to-br from-indigo-50 to-purple-50 border border-indigo-200 rounded-xl shadow-sm">
+          <div class="flex items-center space-x-2 mb-3">
+            <div class="w-4 h-4 bg-gradient-to-r from-indigo-500 to-purple-600 rounded-full flex items-center justify-center">
+              <span class="text-white text-xs">✓</span>
+            </div>
+            <span class="font-semibold text-indigo-900">Automatic Analysis</span>
           </div>
-          <p class="text-sm text-blue-800">
+          <p class="text-sm text-indigo-800 leading-relaxed">
             Player analysis will automatically start when you join a champion select lobby. 
             The system will check each player's winrate, recent performance, and potential boosting indicators.
           </p>
         </div>
         
         <!-- Analysis Features -->
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-          <div class="p-3 border rounded-lg">
-            <h4 class="font-medium text-green-700 mb-1">✅ Win Rate Analysis</h4>
-            <p class="text-gray-600">Real-time win rate and rank information</p>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div class="p-4 bg-gradient-to-br from-green-50 to-emerald-50 border border-green-200 rounded-xl shadow-sm hover:shadow-md transition-all">
+            <h4 class="font-semibold text-green-700 mb-2 flex items-center gap-2">
+              <span class="text-base">📊</span>
+              Win Rate Analysis
+            </h4>
+            <p class="text-sm text-green-600 leading-relaxed">Real-time win rate and rank information</p>
           </div>
-          <div class="p-3 border rounded-lg">
-            <h4 class="font-medium text-orange-700 mb-1">⚠️ Boosting Detection</h4>
-            <p class="text-gray-600">Flash position changes and suspicious patterns</p>
+          <div class="p-4 bg-gradient-to-br from-orange-50 to-amber-50 border border-orange-200 rounded-xl shadow-sm hover:shadow-md transition-all">
+            <h4 class="font-semibold text-orange-700 mb-2 flex items-center gap-2">
+              <span class="text-base">🕵️</span>
+              Boosting Detection
+            </h4>
+            <p class="text-sm text-orange-600 leading-relaxed">Flash position changes and suspicious patterns</p>
           </div>
-          <div class="p-3 border rounded-lg">
-            <h4 class="font-medium text-red-700 mb-1">🚨 Performance Flags</h4>
-            <p class="text-gray-600">Feeding, poor KDA, and consistency issues</p>
+          <div class="p-4 bg-gradient-to-br from-red-50 to-pink-50 border border-red-200 rounded-xl shadow-sm hover:shadow-md transition-all">
+            <h4 class="font-semibold text-red-700 mb-2 flex items-center gap-2">
+              <span class="text-base">⚡</span>
+              Performance Flags
+            </h4>
+            <p class="text-sm text-red-600 leading-relaxed">Feeding, poor KDA, and consistency issues</p>
           </div>
         </div>
       </div>
@@ -227,12 +259,16 @@
   </Card>
 
   <!-- Status Display -->
-  <Card>
-    <CardContent class="p-4">
-      <div class="text-center text-sm">
-        <span class="font-medium">Status:</span>
-        <span class="ml-2">{$state || "Ready"}</span>
+  <Card class="bg-white/90 backdrop-blur-sm border-0 shadow-lg">
+    <CardContent class="p-5">
+      <div class="flex items-center justify-center gap-3">
+        <div class="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
+        <span class="font-medium text-gray-700">Status:</span>
+        <span class="px-3 py-1 bg-gradient-to-r from-gray-100 to-gray-200 rounded-full text-sm font-medium text-gray-800">
+          {$state || "Ready"}
+        </span>
       </div>
     </CardContent>
   </Card>
+  </div>
 </div>

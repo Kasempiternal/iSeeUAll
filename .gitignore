@@ -75,3 +75,7 @@ tmp/
 # Build artifacts
 bundle/
 *.zip
+# Claude Agent System
+ClaudeFiles/
+!ClaudeFiles/documentation/learnings/
+!ClaudeFiles/documentation/project/

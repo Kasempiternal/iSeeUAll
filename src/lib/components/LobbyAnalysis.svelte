@@ -83,27 +83,31 @@
 
 <div class="space-y-4">
   <!-- Header -->
-  <Card>
-    <CardHeader>
+  <Card class="bg-white/90 backdrop-blur-sm border-0 shadow-lg">
+    <CardHeader class="bg-gradient-to-r from-purple-500 to-pink-600 text-white rounded-t-lg">
       <div class="flex items-center justify-between">
-        <div class="flex items-center space-x-2">
-          <Users class="h-5 w-5" />
-          <CardTitle>Lobby Analysis</CardTitle>
-          {#if players.length > 0}
-            <Badge variant="secondary">{players.length} players</Badge>
-          {/if}
+        <div class="flex items-center space-x-3">
+          <div class="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+            <Users class="h-4 w-4" />
+          </div>
+          <div>
+            <CardTitle class="text-xl">Lobby Analysis</CardTitle>
+            {#if players.length > 0}
+              <Badge variant="secondary" class="mt-1 bg-white/20 text-white border-white/30">{players.length} players</Badge>
+            {/if}
+          </div>
         </div>
         
         <div class="flex items-center space-x-2">
           {#if !isLoading && analyses.length > 0}
-            <Button variant="outline" size="sm" on:click={refreshAnalysis}>
+            <Button variant="outline" size="sm" on:click={refreshAnalysis} class="bg-white/20 text-white border-white/30 hover:bg-white/30">
               <RefreshCw class="h-4 w-4 mr-1" />
               Refresh
             </Button>
           {/if}
           
           {#if !autoAnalyze && players.length > 0 && analyses.length === 0}
-            <Button size="sm" on:click={analyzePlayers}>
+            <Button size="sm" on:click={analyzePlayers} class="bg-white/20 text-white border-white/30 hover:bg-white/30">
               <Eye class="h-4 w-4 mr-1" />
               Analyze Lobby
             </Button>

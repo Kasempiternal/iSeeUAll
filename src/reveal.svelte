@@ -14,8 +14,8 @@
   let ivernEnabled = false;
   let autoLock = true;
   let isInChampSelect = false;
-  let lobbyPlayers: { gameName: string; gameTag: string }[] = [];
-  let currentRegion = 'na1'; // Default region, will be updated from backend
+  let lobbyPlayers: { gameName: string; gameTag: string; puuid?: string }[] = [];
+  let currentRegion = 'euw'; // Force EUW for all lookups
   let champSelectListener: any = null;
 
   interface Participant {
@@ -47,7 +47,6 @@
 
     // Listen for champion select events
     champSelectListener = await listen<LobbyData>('champ_select_started', (event) => {
-      console.log('Champion select started:', event.payload);
       isInChampSelect = true;
       
       // Convert participants to the format expected by LobbyAnalysis
@@ -55,20 +54,18 @@
         .filter(p => p.game_name && p.game_tag) // Filter out invalid entries
         .map(p => ({
           gameName: p.game_name,
-          gameTag: p.game_tag
+          gameTag: p.game_tag,
+          puuid: p.puuid
         }));
 
-      // Set region from first participant (they should all be the same)
-      if (event.payload.participants.length > 0) {
-        currentRegion = mapRegion(event.payload.participants[0].region);
-      }
+      // Force EUW region regardless of LCU-reported region
+      currentRegion = 'euw';
 
       state.set(`Champion select detected! Analyzing ${lobbyPlayers.length} players...`);
     });
 
     // Also listen for when champion select ends
     const gameFlowListener = await listen<string>('gameflow_state_update', (event) => {
-      console.log('Gameflow state update:', event.payload);
       
       // Reset when leaving champion select
       if (event.payload !== 'ChampSelect' && isInChampSelect) {
@@ -87,27 +84,23 @@
   });
 
   // Map Riot region codes to OP.GG region codes
-  function mapRegion(riotRegion: string): string {
+  function mapRegion(input: string): string {
+    if (!input) return 'na';
+    const val = input.toUpperCase();
+    // Accept already-correct slugs
+    const knownSlugs = new Set(['na','euw','eune','kr','jp','br','lan','las','oce','ru','tr','sg','ph','tw','vn','th']);
+    if (knownSlugs.has(input.toLowerCase())) return input.toLowerCase();
+
     const regionMap: Record<string, string> = {
-      'NA1': 'na',
-      'EUW1': 'euw',
-      'EUN1': 'eune', 
-      'KR': 'kr',
-      'JP1': 'jp',
-      'BR1': 'br',
-      'LA1': 'lan',
-      'LA2': 'las',
-      'OC1': 'oce',
-      'RU': 'ru',
-      'TR1': 'tr',
-      'SG2': 'sg',
-      'PH2': 'ph',
-      'TW2': 'tw',
-      'VN2': 'vn',
-      'TH2': 'th'
+      // Platform IDs
+      'NA1': 'na', 'EUW1': 'euw', 'EUN1': 'eune', 'KR': 'kr', 'JP1': 'jp',
+      'BR1': 'br', 'LA1': 'lan', 'LA2': 'las', 'OC1': 'oce', 'RU': 'ru', 'TR1': 'tr',
+      'SG2': 'sg', 'PH2': 'ph', 'TW2': 'tw', 'VN2': 'vn', 'TH2': 'th',
+      // Web region variants
+      'NA': 'na', 'EUW': 'euw', 'EUNE': 'eune', 'EUN': 'eune', 'JP': 'jp', 'BR': 'br',
+      'LA': 'lan', 'OC': 'oce', 'TR': 'tr', 'SG': 'sg', 'PH': 'ph', 'TW': 'tw', 'VN': 'vn', 'TH': 'th'
     };
-    
-    return regionMap[riotRegion] || 'na';
+    return regionMap[val] || 'na';
   }
 
   async function toggleIvernSelect() {
@@ -140,16 +133,16 @@
   }
 </script>
 
-<div class="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
+<div class="min-h-screen bg-background">
   <!-- Top Bar with Connection Status -->
-  <div class="flex justify-between items-center p-4 bg-white/80 backdrop-blur-sm border-b border-gray-200">
+  <div class="flex justify-between items-center p-4 bg-gray-800/90 backdrop-blur-sm border-b border-gray-700">
     <div class="flex items-center gap-3">
       <div class="w-8 h-8 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-lg flex items-center justify-center">
         <span class="text-white font-bold text-sm">R</span>
       </div>
       <div>
-        <h1 class="text-xl font-bold text-gray-900">Reveal</h1>
-        <p class="text-xs text-gray-500">Champion Select Utility</p>
+        <h1 class="text-xl font-bold text-white">Reveal</h1>
+        <p class="text-xs text-gray-300">Champion Select Utility</p>
       </div>
     </div>
     
@@ -168,7 +161,7 @@
   {/if}
 
   <!-- Settings Section -->
-  <Card class="bg-white/90 backdrop-blur-sm border-0 shadow-lg">
+  <Card class="bg-gray-800/90 backdrop-blur-sm border-0 shadow-lg">
     <CardHeader class="bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-t-lg">
       <CardTitle class="text-xl flex items-center gap-2">
         <div class="w-6 h-6 bg-white/20 rounded-full flex items-center justify-center">
@@ -180,13 +173,13 @@
     <CardContent class="space-y-6 p-6">
       <!-- Ivern Auto-Select Settings -->
       <div class="space-y-4">
-        <h3 class="text-lg font-semibold">Ivern Auto-Select</h3>
+        <h3 class="text-lg font-semibold text-white">Ivern Auto-Select</h3>
         
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div class="flex items-center justify-between p-4 bg-gradient-to-br from-green-50 to-emerald-50 border border-green-200 rounded-xl shadow-sm hover:shadow-md transition-all">
+          <div class="flex items-center justify-between p-4 bg-gradient-to-br from-green-800/20 to-emerald-800/20 border border-green-600 rounded-xl shadow-sm hover:shadow-md transition-all">
             <div>
-              <span class="font-medium text-green-800">Enable Auto-Select</span>
-              <p class="text-sm text-green-600">Automatically select Ivern in champion select</p>
+              <span class="font-medium text-green-200">Enable Auto-Select</span>
+              <p class="text-sm text-green-400">Automatically select Ivern in champion select</p>
             </div>
             <Button 
               variant={ivernEnabled ? "default" : "secondary"} 
@@ -197,10 +190,10 @@
             </Button>
           </div>
           
-          <div class="flex items-center justify-between p-4 bg-gradient-to-br from-blue-50 to-cyan-50 border border-blue-200 rounded-xl shadow-sm hover:shadow-md transition-all">
+          <div class="flex items-center justify-between p-4 bg-gradient-to-br from-blue-800/20 to-cyan-800/20 border border-blue-600 rounded-xl shadow-sm hover:shadow-md transition-all">
             <div>
-              <span class="font-medium text-blue-800">Auto-lock Mode</span>
-              <p class="text-sm text-blue-600">Lock in Ivern immediately or just hover</p>
+              <span class="font-medium text-blue-200">Auto-lock Mode</span>
+              <p class="text-sm text-blue-400">Lock in Ivern immediately or just hover</p>
             </div>
             <Button 
               variant={autoLock ? "default" : "secondary"} 
@@ -216,15 +209,15 @@
 
       <!-- Player Analysis Settings -->
       <div class="space-y-4">
-        <h3 class="text-lg font-semibold">Player Analysis</h3>
-        <div class="p-4 bg-gradient-to-br from-indigo-50 to-purple-50 border border-indigo-200 rounded-xl shadow-sm">
+        <h3 class="text-lg font-semibold text-white">Player Analysis</h3>
+        <div class="p-4 bg-gradient-to-br from-indigo-800/20 to-purple-800/20 border border-indigo-600 rounded-xl shadow-sm">
           <div class="flex items-center space-x-2 mb-3">
             <div class="w-4 h-4 bg-gradient-to-r from-indigo-500 to-purple-600 rounded-full flex items-center justify-center">
               <span class="text-white text-xs">✓</span>
             </div>
-            <span class="font-semibold text-indigo-900">Automatic Analysis</span>
+            <span class="font-semibold text-indigo-200">Automatic Analysis</span>
           </div>
-          <p class="text-sm text-indigo-800 leading-relaxed">
+          <p class="text-sm text-indigo-300 leading-relaxed">
             Player analysis will automatically start when you join a champion select lobby. 
             The system will check each player's winrate, recent performance, and potential boosting indicators.
           </p>
@@ -232,26 +225,26 @@
         
         <!-- Analysis Features -->
         <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div class="p-4 bg-gradient-to-br from-green-50 to-emerald-50 border border-green-200 rounded-xl shadow-sm hover:shadow-md transition-all">
-            <h4 class="font-semibold text-green-700 mb-2 flex items-center gap-2">
+          <div class="p-4 bg-gradient-to-br from-green-800/20 to-emerald-800/20 border border-green-600 rounded-xl shadow-sm hover:shadow-md transition-all">
+            <h4 class="font-semibold text-green-200 mb-2 flex items-center gap-2">
               <span class="text-base">📊</span>
               Win Rate Analysis
             </h4>
-            <p class="text-sm text-green-600 leading-relaxed">Real-time win rate and rank information</p>
+            <p class="text-sm text-green-400 leading-relaxed">Real-time win rate and rank information</p>
           </div>
-          <div class="p-4 bg-gradient-to-br from-orange-50 to-amber-50 border border-orange-200 rounded-xl shadow-sm hover:shadow-md transition-all">
-            <h4 class="font-semibold text-orange-700 mb-2 flex items-center gap-2">
+          <div class="p-4 bg-gradient-to-br from-orange-800/20 to-amber-800/20 border border-orange-600 rounded-xl shadow-sm hover:shadow-md transition-all">
+            <h4 class="font-semibold text-orange-200 mb-2 flex items-center gap-2">
               <span class="text-base">🕵️</span>
               Boosting Detection
             </h4>
-            <p class="text-sm text-orange-600 leading-relaxed">Flash position changes and suspicious patterns</p>
+            <p class="text-sm text-orange-400 leading-relaxed">Flash position changes and suspicious patterns</p>
           </div>
-          <div class="p-4 bg-gradient-to-br from-red-50 to-pink-50 border border-red-200 rounded-xl shadow-sm hover:shadow-md transition-all">
-            <h4 class="font-semibold text-red-700 mb-2 flex items-center gap-2">
+          <div class="p-4 bg-gradient-to-br from-red-800/20 to-pink-800/20 border border-red-600 rounded-xl shadow-sm hover:shadow-md transition-all">
+            <h4 class="font-semibold text-red-200 mb-2 flex items-center gap-2">
               <span class="text-base">⚡</span>
               Performance Flags
             </h4>
-            <p class="text-sm text-red-600 leading-relaxed">Feeding, poor KDA, and consistency issues</p>
+            <p class="text-sm text-red-400 leading-relaxed">Feeding, poor KDA, and consistency issues</p>
           </div>
         </div>
       </div>
@@ -259,12 +252,12 @@
   </Card>
 
   <!-- Status Display -->
-  <Card class="bg-white/90 backdrop-blur-sm border-0 shadow-lg">
+  <Card class="bg-gray-800/90 backdrop-blur-sm border-0 shadow-lg">
     <CardContent class="p-5">
       <div class="flex items-center justify-center gap-3">
         <div class="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
-        <span class="font-medium text-gray-700">Status:</span>
-        <span class="px-3 py-1 bg-gradient-to-r from-gray-100 to-gray-200 rounded-full text-sm font-medium text-gray-800">
+        <span class="font-medium text-gray-300">Status:</span>
+        <span class="px-3 py-1 bg-gradient-to-r from-gray-700 to-gray-600 rounded-full text-sm font-medium text-white">
           {$state || "Ready"}
         </span>
       </div>

@@ -11,7 +11,6 @@
     // Listen for LCU connection status updates
     connectionListener = await listen<boolean>('lcu_state_update', (event) => {
       isConnected = event.payload;
-      console.log('LCU connection status updated:', isConnected);
     });
   });
 

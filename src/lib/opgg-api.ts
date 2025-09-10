@@ -96,7 +96,7 @@ export class OpggApiClient {
       
       return response;
     } catch (error) {
-      console.error(`OP.GG API request failed for ${endpoint}:`, error);
+      // console.error(`OP.GG API request failed for ${endpoint}:`, error);
       throw error;
     }
   }
@@ -114,39 +114,283 @@ export class OpggApiClient {
       });
       return result;
     } catch (error) {
-      console.error(`MCP API call failed for ${functionName}:`, error);
+      // console.error(`MCP API call failed for ${functionName}:`, error);
       throw error;
     }
+  }
+
+  /**
+   * OP.GG MCP returns a { content: [{ type: 'text', text: 'json-string' }, ...] }
+   * Parse the first JSON table payload into headers + rows
+   */
+  private parseMcpTable(result: any): { headers: string[]; rows: any[][] } | null {
+    // console.log('[MCP] parseMcpTable called with result:', result);
+    if (!result) {
+      // console.log('[MCP] parseMcpTable: result is null/undefined');
+      return null;
+    }
+    const content = (result as any).content;
+    // console.log('[MCP] parseMcpTable: content:', content);
+    if (!Array.isArray(content)) {
+      // console.log('[MCP] parseMcpTable: content is not an array');
+      return null;
+    }
+    for (const c of content) {
+      // console.log('[MCP] parseMcpTable: processing content item:', c);
+      if (c && c.type === 'text' && typeof c.text === 'string') {
+        try {
+          // console.log('[MCP] parseMcpTable: parsing text:', c.text.substring(0, 200) + '...');
+          const parsed = JSON.parse(c.text);
+          // console.log('[MCP] parseMcpTable: parsed successfully:', parsed);
+          if (parsed && Array.isArray(parsed.headers) && Array.isArray(parsed.rows)) {
+            // console.log('[MCP] parseMcpTable: returning valid table with', parsed.headers.length, 'headers and', parsed.rows.length, 'rows');
+            return { headers: parsed.headers, rows: parsed.rows };
+          } else {
+            // console.log('[MCP] parseMcpTable: parsed object missing headers or rows');
+          }
+        } catch (e) {
+          // console.log('[MCP] parseMcpTable: JSON parse failed:', e);
+          continue;
+        }
+      } else {
+        // console.log('[MCP] parseMcpTable: content item invalid type/structure');
+      }
+    }
+    // console.log('[MCP] parseMcpTable: no valid content found, returning null');
+    return null;
+  }
+
+  private roman(div: number | null | undefined): string {
+    const map: Record<number, string> = {1:'I',2:'II',3:'III',4:'IV'};
+    return div && map[div] ? map[div] : '';
+  }
+
+  private normalizePlayerStats(raw: PlayerStats): PlayerStats {
+    const normTier = (raw.tier || '').toUpperCase();
+    const tier = (normTier === '' || normTier === 'NA' || normTier === 'NONE') ? 'UNRANKED' : normTier;
+    const normRank = (raw.rank || '').toUpperCase();
+    const rank = (normRank === 'NA' || normRank === 'NONE') ? '' : normRank;
+    const region = (raw.region || 'euw').toLowerCase();
+    return {
+      ...raw,
+      tier,
+      rank,
+      region
+    };
   }
 
   /**
    * Search for summoner by game name and tag
    */
   async searchSummoner(gameName: string, gameTag: string, region: string = 'na1'): Promise<PlayerStats | null> {
+    // Force EUW for now
+    region = 'euw';
     try {
-      const response = await this.makeRequest('lol-summoner-search', {
-        gameName,
-        gameTag,
-        region
-      });
+      // console.log(`[MCP] Searching for summoner: ${gameName}#${gameTag} in region ${region}`);
+      
+      // Try multiple parameter formats for the lol-summoner-search tool
+      const parameterFormats = [
+        // Format 1: Standard parameters
+        {
+          game_name: gameName,
+          tag_line: gameTag,
+          region: 'EUW'
+        },
+        // Format 2: Alternative naming
+        {
+          gameName: gameName,
+          gameTag: gameTag,
+          region: 'EUW'
+        },
+        // Format 3: Riot ID format
+        {
+          riotId: `${gameName}#${gameTag}`,
+          region: 'EUW'
+        },
+        // Format 4: Simple format
+        {
+          summoner: gameName,
+          tag: gameTag,
+          region: 'EUW'
+        }
+      ];
 
-      if (!response) return null;
+      let lastError = null;
+      
+      for (const [index, params] of parameterFormats.entries()) {
+        try {
+          // console.log(`[MCP] Trying parameter format ${index + 1}:`, params);
+          
+          const result = await this.callMCPFunction('lol-summoner-search', params);
+          // console.log(`[MCP] Raw result from format ${index + 1}:`, result);
+          
+          // Try different result parsing approaches
+          if (result) {
+            // Approach 1: Direct object result
+            if (result.tier || result.rank || result.level) {
+              // console.log(`[MCP] Found direct object result`);
+              return this.parseDirectSummonerResult(result, gameName, gameTag, region);
+            }
+            
+            // Approach 2: Table format
+            const table = this.parseMcpTable(result);
+            if (table) {
+              // console.log(`[MCP] Found table format result`);
+              const tableResult = this.parseTableSummonerResult(table, gameName, gameTag, region);
+              // console.log(`[MCP] parseTableSummonerResult returned:`, tableResult);
+              return tableResult;
+            }
+            
+            // Approach 3: Nested content
+            if (result.content || result.data) {
+              // console.log(`[MCP] Found nested content result`);
+              const nested = result.content || result.data;
+              return this.parseNestedSummonerResult(nested, gameName, gameTag, region);
+            }
+            
+            // console.log(`[MCP] Format ${index + 1} returned unparseable result`);
+          }
+        } catch (error) {
+          // console.warn(`[MCP] Parameter format ${index + 1} failed:`, error);
+          lastError = error;
+          continue;
+        }
+      }
+      
+      throw lastError || new Error('All parameter formats failed');
+    } catch (error) {
+      // console.error('[MCP] Failed to search summoner:', error);
+      return null;
+    }
+  }
 
-      return {
+  private parseDirectSummonerResult(result: any, gameName: string, gameTag: string, region: string): PlayerStats | null {
+    try {
+      const tier = (result.tier || result.rank || 'UNRANKED').toString().toUpperCase();
+      const rank = result.division || result.rank_division || '';
+      const lp = Number(result.lp || result.leaguePoints || 0);
+      const wins = Number(result.wins || 0);
+      const losses = Number(result.losses || 0);
+      const level = Number(result.level || result.summonerLevel || 1);
+      const winRate = (wins + losses) > 0 ? (wins / (wins + losses)) * 100 : 0;
+
+      return this.normalizePlayerStats({
         summonerName: gameName,
         gameTag,
         region,
-        tier: response.tier || 'UNRANKED',
-        rank: response.rank || '',
-        lp: response.leaguePoints || 0,
-        winRate: response.winRate || 0,
-        wins: response.wins || 0,
-        losses: response.losses || 0,
-        level: response.summonerLevel || 1,
-        profileIconId: response.profileIconId || 0
-      };
+        tier,
+        rank,
+        lp,
+        winRate,
+        wins,
+        losses,
+        level,
+        profileIconId: Number(result.profileIconId || 0)
+      });
     } catch (error) {
-      console.error('Failed to search summoner:', error);
+      // console.error('[MCP] Failed to parse direct summoner result:', error);
+      return null;
+    }
+  }
+
+  private parseTableSummonerResult(table: { headers: string[]; rows: any[][] }, gameName: string, gameTag: string, region: string): PlayerStats | null {
+    try {
+      // console.log(`[MCP] parseTableSummonerResult called for ${gameName}#${gameTag}`);
+      const { headers, rows } = table;
+      // console.log(`[MCP] Table headers:`, headers);
+      // console.log(`[MCP] Table rows count:`, rows.length);
+      const idx = (k: string) => headers.indexOf(k);
+      const iGameName = idx('game_name');
+      const iTag = idx('tagline');
+      const iLevel = idx('level');
+      const iLeagueStats = idx('league_stats');
+      
+      // console.log(`[MCP] Column indices: game_name=${iGameName}, tagline=${iTag}, level=${iLevel}, league_stats=${iLeagueStats}`);
+      
+      if (iGameName === -1 || iTag === -1) {
+        // console.log('[MCP] Table missing required columns:', headers);
+        return null;
+      }
+
+      // console.log(`[MCP] Searching for player: ${gameName.toLowerCase()} with tag: ${gameTag.toUpperCase()}`);
+      if (rows.length > 0) {
+        // console.log(`[MCP] First row sample: game_name="${rows[0][iGameName]}", tagline="${rows[0][iTag]}"`);
+      }
+      
+      const row = rows.find(r => (r[iGameName]||'').toLowerCase() === gameName.toLowerCase() && (r[iTag]||'').toUpperCase() === gameTag.toUpperCase()) || rows[0];
+      if (!row) {
+        // console.log('[MCP] No matching row found');
+        return null;
+      }
+      
+      // console.log(`[MCP] Using row: game_name="${row[iGameName]}", tagline="${row[iTag]}"`);
+      // console.log(`[MCP] Raw level:`, row[iLevel]);
+      // console.log(`[MCP] Raw league_stats:`, row[iLeagueStats]);
+
+      const level = Number(row[iLevel] || 0) || 1;
+      let tier = 'UNRANKED';
+      let division = '';
+      let lp = 0;
+      let wins = 0;
+      let losses = 0;
+      
+      if (iLeagueStats !== -1) {
+        try {
+          const leagues = JSON.parse(row[iLeagueStats]);
+          const solo = Array.isArray(leagues) ? leagues.find((e: any) => (e?.game_type||'').toUpperCase().includes('SOLORANKED')) : null;
+          const info = solo?.tier_info || {};
+          if (info?.tier) tier = (info.tier as string).toUpperCase();
+          division = this.roman(info?.division ?? null);
+          lp = Number(info?.lp || 0) || 0;
+          wins = Number(solo?.win || 0) || 0;
+          losses = Number(solo?.lose || 0) || 0;
+        } catch {}
+      }
+
+      const winRate = (wins + losses) > 0 ? (wins / (wins + losses)) * 100 : 0;
+      // console.log(`[MCP] Final parsed stats: tier=${tier}, division=${division}, lp=${lp}, wins=${wins}, losses=${losses}, level=${level}, winRate=${winRate.toFixed(1)}%`);
+      
+      const result = this.normalizePlayerStats({
+        summonerName: gameName,
+        gameTag,
+        region,
+        tier,
+        rank: division,
+        lp,
+        winRate,
+        wins,
+        losses,
+        level,
+        profileIconId: 0
+      });
+      
+      // console.log(`[MCP] Normalized result:`, result);
+      return result;
+    } catch (error) {
+      // console.error('[MCP] Failed to parse table summoner result:', error);
+      return null;
+    }
+  }
+
+  private parseNestedSummonerResult(nested: any, gameName: string, gameTag: string, region: string): PlayerStats | null {
+    try {
+      // Handle array of content
+      if (Array.isArray(nested)) {
+        for (const item of nested) {
+          if (item && (item.tier || item.rank || item.level)) {
+            return this.parseDirectSummonerResult(item, gameName, gameTag, region);
+          }
+        }
+      }
+      
+      // Handle nested object
+      if (nested && typeof nested === 'object') {
+        return this.parseDirectSummonerResult(nested, gameName, gameTag, region);
+      }
+      
+      return null;
+    } catch (error) {
+      // console.error('[MCP] Failed to parse nested summoner result:', error);
       return null;
     }
   }
@@ -155,70 +399,322 @@ export class OpggApiClient {
    * Get recent match history for a summoner
    */
   async getMatchHistory(gameName: string, gameTag: string, region: string = 'na1', count: number = 20): Promise<MatchData[]> {
+    // Force EUW for now
+    region = 'euw';
     try {
-      const response = await this.makeRequest('lol-summoner-game-history', {
-        gameName,
-        gameTag,
-        region,
-        count
-      });
+      // console.log(`[MCP] Getting match history for: ${gameName}#${gameTag}`);
+      
+      // Try multiple parameter formats for the lol-summoner-game-history tool
+      const parameterFormats = [
+        // Format 1: Standard parameters
+        {
+          game_name: gameName,
+          tag_line: gameTag,
+          region: 'EUW',
+          count
+        },
+        // Format 2: Alternative naming
+        {
+          gameName: gameName,
+          gameTag: gameTag,
+          region: 'EUW',
+          limit: count
+        },
+        // Format 3: Riot ID format
+        {
+          riotId: `${gameName}#${gameTag}`,
+          region: 'EUW',
+          count
+        },
+        // Format 4: Simple format
+        {
+          summoner: gameName,
+          tag: gameTag,
+          region: 'EUW',
+          games: count
+        }
+      ];
 
-      if (!response || !response.matches) return [];
-
-      return response.matches.map((match: any): MatchData => ({
-        matchId: match.gameId || '',
-        championId: match.championId || 0,
-        championName: match.championName || '',
-        queueId: match.queueId || 0,
-        gameMode: match.gameMode || '',
-        gameType: match.gameType || '',
-        gameCreation: match.gameCreationDate || 0,
-        gameDuration: match.gameDurationInSeconds || 0,
-        win: match.isWin || false,
-        kills: match.stats?.kills || 0,
-        deaths: match.stats?.deaths || 0,
-        assists: match.stats?.assists || 0,
-        kda: this.calculateKDA(match.stats?.kills || 0, match.stats?.deaths || 0, match.stats?.assists || 0),
-        summoner1Id: match.spells?.[0] || 0,
-        summoner2Id: match.spells?.[1] || 0,
-        items: match.stats?.items || [],
-        wardsPlaced: match.stats?.wardsPlaced || 0,
-        wardsKilled: match.stats?.wardsKilled || 0,
-        visionScore: match.stats?.visionScore || 0,
-        totalMinionsKilled: match.stats?.totalMinionsKilled || 0,
-        goldEarned: match.stats?.goldEarned || 0,
-        damageDealtToChampions: match.stats?.totalDamageDealtToChampions || 0
-      }));
+      let lastError = null;
+      
+      for (const [index, params] of parameterFormats.entries()) {
+        try {
+          // console.log(`[MCP] Trying match history format ${index + 1}:`, params);
+          
+          const result = await this.callMCPFunction('lol-summoner-game-history', params);
+          // console.log(`[MCP] Match history raw result from format ${index + 1}:`, result);
+          
+          if (result) {
+            // Try different parsing approaches
+            const matches = this.parseMatchHistoryResult(result, gameName, gameTag, count);
+            if (matches.length > 0) {
+              // console.log(`[MCP] Successfully parsed ${matches.length} matches from format ${index + 1}`);
+              return matches;
+            }
+          }
+        } catch (error) {
+          // console.warn(`[MCP] Match history format ${index + 1} failed:`, error);
+          lastError = error;
+          continue;
+        }
+      }
+      
+      // console.warn('[MCP] All match history formats failed, returning empty array');
+      return [];
     } catch (error) {
-      console.error('Failed to get match history:', error);
+      // console.error('[MCP] Failed to get match history:', error);
       return [];
     }
   }
 
-  /**
-   * Analyze player for boosting indicators and performance issues
-   */
-  async analyzePlayer(gameName: string, gameTag: string, region: string = 'na1'): Promise<PlayerAnalysis | null> {
+  private parseMatchHistoryResult(result: any, gameName: string, gameTag: string, count: number): MatchData[] {
     try {
-      const playerStats = await this.searchSummoner(gameName, gameTag, region);
-      if (!playerStats) return null;
-
-      const recentMatches = await this.getMatchHistory(gameName, gameTag, region, 70); // Get 70 games for flash analysis
+      // Approach 1: Direct array of matches
+      if (Array.isArray(result)) {
+        return this.parseMatchArray(result, gameName, gameTag, count);
+      }
       
-      const boostedFlags = this.detectBoostingIndicators(recentMatches);
-      const performanceFlags = this.analyzePerformance(recentMatches.slice(0, 5)); // Last 5 games for performance
-      const riskScore = this.calculateRiskScore(boostedFlags, performanceFlags, playerStats);
+      // Approach 2: Table format
+      const table = this.parseMcpTable(result);
+      if (table) {
+        return this.parseMatchTable(table, gameName, gameTag, count);
+      }
+      
+      // Approach 3: Nested content
+      if (result.content && Array.isArray(result.content)) {
+        return this.parseMatchArray(result.content, gameName, gameTag, count);
+      }
+      
+      // Approach 4: Data property
+      if (result.data && Array.isArray(result.data)) {
+        return this.parseMatchArray(result.data, gameName, gameTag, count);
+      }
+      
+      // Approach 5: Matches property
+      if (result.matches && Array.isArray(result.matches)) {
+        return this.parseMatchArray(result.matches, gameName, gameTag, count);
+      }
+      
+      // console.log('[MCP] No parseable match data found in result');
+      return [];
+    } catch (error) {
+      // console.error('[MCP] Failed to parse match history result:', error);
+      return [];
+    }
+  }
 
-      return {
-        playerStats,
-        recentMatches: recentMatches.slice(0, 10), // Return last 10 for UI display
-        boostedFlags,
-        performanceFlags,
-        riskScore
+  private parseMatchArray(matches: any[], gameName: string, gameTag: string, count: number): MatchData[] {
+    const out: MatchData[] = [];
+    
+    for (const match of matches.slice(0, count)) {
+      try {
+        // Try direct match object
+        if (match.kills !== undefined && match.deaths !== undefined) {
+          out.push(this.parseDirectMatch(match));
+          continue;
+        }
+        
+        // Try finding participant data
+        const participants = match.participants || match.players || [];
+        if (Array.isArray(participants)) {
+          const me = participants.find((p: any) => 
+            (p?.summoner?.game_name||'').toLowerCase() === gameName.toLowerCase() && 
+            (p?.summoner?.tagline||'').toUpperCase() === gameTag.toUpperCase()
+          );
+          
+          if (me) {
+            out.push(this.parseParticipantMatch(match, me));
+          }
+        }
+      } catch (error) {
+        // console.warn('[MCP] Failed to parse individual match:', error);
+      }
+    }
+    
+    return out;
+  }
+
+  private parseMatchTable(table: { headers: string[]; rows: any[][] }, gameName: string, gameTag: string, count: number): MatchData[] {
+    const { headers, rows } = table;
+    const idx = (k: string) => headers.indexOf(k);
+    const iParticipants = idx('participants');
+    const iGameType = idx('game_type');
+    const iCreatedAt = idx('created_at');
+    const iGameLen = idx('game_length_second');
+    const iId = idx('id');
+    
+    if (iParticipants === -1) return [];
+
+    const out: MatchData[] = [];
+    for (const r of rows.slice(0, count)) {
+      try {
+        const parts = JSON.parse(r[iParticipants]);
+        const me = parts.find((p: any) => (p?.summoner?.game_name||'').toLowerCase() === gameName.toLowerCase() && (p?.summoner?.tagline||'').toUpperCase() === gameTag.toUpperCase());
+        if (!me) continue;
+        
+        const stats = me.stats || {};
+        const spells = me.spells || [];
+        const win = (stats.result || '').toUpperCase() === 'WIN';
+        
+        out.push({
+          matchId: r[iId] || '',
+          championId: Number(me.champion_id || 0),
+          championName: '',
+          queueId: 0,
+          gameMode: '',
+          gameType: r[iGameType] || '',
+          gameCreation: Date.parse(r[iCreatedAt]) || 0,
+          gameDuration: Number(r[iGameLen] || 0),
+          win,
+          kills: Number(stats.kill || 0),
+          deaths: Number(stats.death || 0),
+          assists: Number(stats.assist || 0),
+          kda: this.calculateKDA(Number(stats.kill||0), Number(stats.death||0), Number(stats.assist||0)),
+          summoner1Id: Number(spells[0] || 0),
+          summoner2Id: Number(spells[1] || 0),
+          items: (me.items || []) as number[],
+          wardsPlaced: Number(stats.ward_place || 0),
+          wardsKilled: Number(stats.ward_kill || 0),
+          visionScore: Number(stats.vision_score || 0),
+          totalMinionsKilled: Number(stats.minion_kill || 0) + Number(stats.neutral_minion_kill || 0),
+          goldEarned: Number(stats.gold_earned || 0),
+          damageDealtToChampions: Number(stats.total_damage_dealt_to_champions || 0)
+        });
+      } catch (error) {
+        // console.warn('[MCP] Failed to parse table row:', error);
+      }
+    }
+    return out;
+  }
+
+  private parseDirectMatch(match: any): MatchData {
+    return {
+      matchId: match.matchId || match.id || '',
+      championId: Number(match.championId || match.champion_id || 0),
+      championName: match.championName || '',
+      queueId: Number(match.queueId || 0),
+      gameMode: match.gameMode || '',
+      gameType: match.gameType || '',
+      gameCreation: Number(match.gameCreation || match.created_at || 0),
+      gameDuration: Number(match.gameDuration || match.duration || 0),
+      win: Boolean(match.win || match.victory),
+      kills: Number(match.kills || 0),
+      deaths: Number(match.deaths || 0),
+      assists: Number(match.assists || 0),
+      kda: this.calculateKDA(Number(match.kills||0), Number(match.deaths||0), Number(match.assists||0)),
+      summoner1Id: Number(match.summoner1Id || match.spell1 || 0),
+      summoner2Id: Number(match.summoner2Id || match.spell2 || 0),
+      items: match.items || [],
+      wardsPlaced: Number(match.wardsPlaced || match.wards || 0),
+      wardsKilled: Number(match.wardsKilled || 0),
+      visionScore: Number(match.visionScore || 0),
+      totalMinionsKilled: Number(match.totalMinionsKilled || match.cs || 0),
+      goldEarned: Number(match.goldEarned || 0),
+      damageDealtToChampions: Number(match.damageDealtToChampions || 0)
+    };
+  }
+
+  private parseParticipantMatch(match: any, participant: any): MatchData {
+    const stats = participant.stats || participant;
+    const spells = participant.spells || [];
+    
+    return {
+      matchId: match.id || match.matchId || '',
+      championId: Number(participant.champion_id || participant.championId || 0),
+      championName: '',
+      queueId: Number(match.queueId || 0),
+      gameMode: match.gameMode || '',
+      gameType: match.game_type || match.gameType || '',
+      gameCreation: Date.parse(match.created_at) || Number(match.gameCreation) || 0,
+      gameDuration: Number(match.game_length_second || match.gameDuration || 0),
+      win: (stats.result || '').toUpperCase() === 'WIN' || Boolean(stats.win),
+      kills: Number(stats.kill || stats.kills || 0),
+      deaths: Number(stats.death || stats.deaths || 0),
+      assists: Number(stats.assist || stats.assists || 0),
+      kda: this.calculateKDA(Number(stats.kill||stats.kills||0), Number(stats.death||stats.deaths||0), Number(stats.assist||stats.assists||0)),
+      summoner1Id: Number(spells[0] || 0),
+      summoner2Id: Number(spells[1] || 0),
+      items: participant.items || [],
+      wardsPlaced: Number(stats.ward_place || stats.wardsPlaced || 0),
+      wardsKilled: Number(stats.ward_kill || stats.wardsKilled || 0),
+      visionScore: Number(stats.vision_score || stats.visionScore || 0),
+      totalMinionsKilled: Number(stats.minion_kill || 0) + Number(stats.neutral_minion_kill || 0) || Number(stats.totalMinionsKilled || 0),
+      goldEarned: Number(stats.gold_earned || stats.goldEarned || 0),
+      damageDealtToChampions: Number(stats.total_damage_dealt_to_champions || stats.damageDealtToChampions || 0)
+    };
+  }
+
+  /**
+   * Analyze player using only the reliable MCP API.
+   * Accepts optional onProgress callback for UI logging.
+   */
+  async analyzePlayer(
+    gameName: string,
+    gameTag: string,
+    region: string = 'na1',
+    puuid?: string,
+    onProgress?: (msg: string) => void
+  ): Promise<PlayerAnalysis | null> {
+    // Force EUW for now
+    region = 'euw';
+    const log = (m: string) => { 
+      try { 
+        onProgress?.(m); 
+      } catch {} 
+    };
+
+    const withTimeout = async <T>(p: Promise<T>, ms: number, label: string): Promise<T> => {
+      return new Promise<T>((resolve, reject) => {
+        const t = setTimeout(() => {
+          reject(new Error(`${label} timeout after ${ms}ms`));
+        }, ms);
+        
+        p.then(v => { 
+          clearTimeout(t); 
+          resolve(v); 
+        }).catch(e => { 
+          clearTimeout(t); 
+          reject(e); 
+        });
+      });
+    };
+
+    try {
+      log('MCP API: searching OP.GG...');
+      const stats = await withTimeout(
+        this.searchSummoner(gameName, gameTag, region) as Promise<PlayerStats|null>, 
+        15000, 
+        'OPGG MCP search'
+      );
+      
+      if (!stats) {
+        throw new Error('MCP API search returned null - player not found');
+      }
+      
+      log('MCP API: fetching match history...');
+      const recentMatches = await withTimeout(
+        this.getMatchHistory(gameName, gameTag, region, 50), 
+        15000, 
+        'OPGG MCP history'
+      );
+      
+      log('MCP API: analyzing player data...');
+      const boostedFlags = this.detectBoostingIndicators(recentMatches);
+      const performanceFlags = this.analyzePerformance(recentMatches.slice(0, 5));
+      const riskScore = this.calculateRiskScore(boostedFlags, performanceFlags, stats);
+      
+      log(`MCP API: success (${recentMatches.length} matches, risk: ${riskScore})`);
+      return { 
+        playerStats: stats, 
+        recentMatches: recentMatches.slice(0, 10), 
+        boostedFlags, 
+        performanceFlags, 
+        riskScore 
       };
     } catch (error) {
-      console.error('Failed to analyze player:', error);
-      return null;
+      const msg = error instanceof Error ? error.message : String(error);
+      log(`MCP API: failed - ${msg}`);
+      throw new Error(`MCP API failed: ${msg}`);
     }
   }
 
@@ -352,13 +848,13 @@ export class OpggApiClient {
   /**
    * Bulk analyze multiple players (for champion select lobby)
    */
-  async analyzeLobbyPlayers(players: { gameName: string; gameTag: string }[], region: string = 'na1'): Promise<PlayerAnalysis[]> {
+  async analyzeLobbyPlayers(players: { gameName: string; gameTag: string; puuid?: string }[], region: string = 'na1'): Promise<PlayerAnalysis[]> {
     const results: PlayerAnalysis[] = [];
     
     // Process players sequentially to respect rate limits
     for (const player of players) {
       try {
-        const analysis = await this.analyzePlayer(player.gameName, player.gameTag, region);
+        const analysis = await this.analyzePlayer(player.gameName, player.gameTag, region, player.puuid);
         if (analysis) {
           results.push(analysis);
         }
@@ -366,7 +862,7 @@ export class OpggApiClient {
         // Add delay between players to avoid rate limiting
         await new Promise(resolve => setTimeout(resolve, this.rateLimitDelay));
       } catch (error) {
-        console.error(`Failed to analyze player ${player.gameName}#${player.gameTag}:`, error);
+        // console.error(`Failed to analyze player ${player.gameName}#${player.gameTag}:`, error);
       }
     }
     
